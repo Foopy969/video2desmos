@@ -3,25 +3,17 @@ import numpy as np
 from scipy.optimize import minimize
 from tqdm import tqdm
 
-# This is optional
-# This script is for optimizing your layer values and opacities for a specific image
-# Copy the results to the start of the image script (replace whats already there)
-
-# Inputs
-image_path = 'image_path.png'
-iterations = 200
-
-# Code
-np.set_printoptions(suppress=True)
+method = "COBYLA"
 
 def get_thresholds(image, depth):
-    threshold, _ = cv2.threshold(image ,0 ,255 , cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    threshold, _ = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     if depth:
         yield from get_thresholds(image[image <= threshold], depth - 1)
         yield from get_thresholds(image[threshold < image], depth - 1)
     yield threshold
 
-def objective(variables):
+
+def objective(variables, v):
     a_o, a_v, b_o, b_v, c_o, c_v, d_o, d_v = variables
 
     A = (1 - a_o) + a_o * a_v
@@ -43,6 +35,7 @@ def objective(variables):
     e = np.array([A, B, C, D, AB, AC, AD, BC, BD, CD, ABC, ABD, ACD, BCD, ABCD])
     diff = np.sort(e) - np.sort(v)
     return np.sum(diff**2)
+
 
 def get_sorted(variables):
     a_o, a_v, b_o, b_v, c_o, c_v, d_o, d_v = variables
@@ -84,31 +77,34 @@ def get_sorted(variables):
     result = sorted(equation_names.items(), key=lambda x: x[1])
     return [x for x, _ in result], [i for _, i in result]
 
-image = cv2.imread(image_path)
-image = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)[:, :, 0]
 
-thresholds = np.sort([0] + [*get_thresholds(image, 3)])
-v = (thresholds[:-1] + thresholds[1:]) / 510
+def get_optimized(image, iterations):
+    thresholds = np.sort([0] + [*get_thresholds(image, 3)])
+    v = (thresholds[:-1] + thresholds[1:]) / 510
 
-bounds = [(0, 1), (0, 1), (0, 1), (0, 1), (0, 1), (0, 1), (0, 1), (0, 1)]
+    bounds = [(0, 1), (0, 0.25), (0, 1), (0, 1), (0, 1), (0, 1), (0, 1), (0.75, 1)]
 
-min_fun = 99
-min_x = []
+    min_fun = 99
+    min_x = []
 
-for i in tqdm(range(iterations)):
-    initial_guess = np.random.rand(8)
-    result = minimize(objective, initial_guess, bounds=bounds, method='COBYLA')
+    for _ in tqdm(range(iterations), desc='optimizing hyperparameters'):
+        initial_guess = np.random.rand(8)
+        result = minimize(
+            objective, initial_guess, args=v, bounds=bounds, method=method
+        )
 
-    if result.fun < min_fun:
-        min_fun = result.fun
-        min_x = result.x
+        if result.fun < min_fun:
+            min_fun = result.fun
+            min_x = result.x
 
-names, values = get_sorted(min_x)
-values = np.array(values + [1])
+    names, values = get_sorted(min_x)
+    values = np.array(values + [1])
 
-a_o, a_v, b_o, b_v, c_o, c_v, d_o, d_v = min_x
+    a_o, a_v, b_o, b_v, c_o, c_v, d_o, d_v = min_x
 
-print('colors =', ['#' + hex(int(i * 255))[2:].zfill(2) * 3 for i in [a_v, b_v, c_v, d_v]])
-print('opacities =', [a_o, b_o, c_o, d_o])
-print('thresholds =', list(np.round((values[1:] + values[:-1]) * 255 / 2).astype(np.uint8)))
-print('channel_mappings =', [[j for j, x in enumerate(names) if i in x] for i in "ABCD"])
+    return (
+        ["#" + hex(int(i * 255))[2:].zfill(2) * 3 for i in [a_v, b_v, c_v, d_v]],
+        [a_o, b_o, c_o, d_o],
+        values * 255,
+        [[j for j, x in enumerate(names) if i in x] for i in "ABCD"],
+    )
